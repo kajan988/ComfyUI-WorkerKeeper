@@ -1,0 +1,19 @@
+[project]
+name = "comfyui-workerkeeper"
+description = "Background service that kills idle comfy-env isolation workers. Zero workflow nodes — one on_prompt hook, two manual API endpoints."
+version = "0.1.0"
+license = { text = "MIT" }
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Repository = ""
+
+[tool.comfy]
+PublisherId = "pznodes"
+DisplayName = "WorkerKeeper"
+Icon = ""
+includes = []
