@@ -19,6 +19,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {}
 ANYPE = "*"
 
 _mapping_cache = None
+_env_names_cache = None
 
 
 def _extract_env_dir(cls):
@@ -63,16 +64,46 @@ def _alive_workers(worker_pool=None):
             yield env_key, worker, gen
 
 
+class _FakeWorker:
+    """Pretends a live worker — _check_worker passes, and send_command is
+    a silent no-op so that __del__ → detach() → _send_device_command()
+    completes without log warnings from comfy-env."""
+    __slots__ = ()
+    def is_alive(self):
+        return True
+    def send_command(self, *args, **kwargs):
+        return None  # Silent no-op — no warning, no delay
+
+
 def _shutdown_worker(env_key, worker, worker_pool, patcher_pool):
     log.info("WorkerKeeper: killing idle worker %s (env=%s)", worker.name, env_key)
     proc = getattr(worker, "_process", None)
     temp_dir = getattr(worker, "_temp_dir", None)
+
+    # ── Replace worker reference on every patcher with a fake ──
+    # This is the only defence we need — SubprocessModelPatcher.__del__ →
+    # detach() → _check_worker() passes (fake.is_alive() → True), and
+    # send_command() is a silent no-op.  No RuntimeError, no warning.
+    fake = _FakeWorker()
+    try:
+        patcher_dict = patcher_pool.pop(env_key, {})
+        if isinstance(patcher_dict, dict):
+            for patcher in patcher_dict.values():
+                try:
+                    patcher._worker = fake
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Fast direct kill — no graceful shutdown, no gc.collect().
     if proc and proc.poll() is None:
         try:
             proc.kill()
             proc.wait(timeout=5)
         except Exception:
             pass
+
     if temp_dir:
         try:
             import shutil
@@ -80,7 +111,6 @@ def _shutdown_worker(env_key, worker, worker_pool, patcher_pool):
         except Exception:
             pass
     worker_pool.pop(env_key, None)
-    patcher_pool.pop(env_key, None)
 
 
 def _short_name(path_str):
@@ -91,12 +121,11 @@ def _short_name(path_str):
 
 
 def _get_env_names():
-    names = set()
-    global _mapping_cache
+    global _mapping_cache, _env_names_cache
 
     if _mapping_cache is None or not _mapping_cache:
         import nodes as comfy_nodes
-        log.warning(
+        log.debug(
             "WorkerKeeper: method1 NODE_CLASS_MAPPINGS has %d entries",
             len(comfy_nodes.NODE_CLASS_MAPPINGS),
         )
@@ -105,43 +134,43 @@ def _get_env_names():
                 _mapping_cache = _build_env_mapping()
             except Exception:
                 _mapping_cache = {}
+
+    names = set()
     if _mapping_cache:
-        log.warning(
-            "WorkerKeeper: method1 mapping has %d entries: %s",
-            len(_mapping_cache), list(_mapping_cache.keys())[:5],
-        )
         for env_dir in _mapping_cache.values():
             names.add(_short_name(env_dir))
 
     try:
         from comfy_env.isolation.wrap import _WORKER_POOL as pool
-        log.warning("WorkerKeeper: method2 worker pool has %d entries", len(pool))
-        for env_key in pool:
-            names.add(_short_name(env_key))
-    except Exception as e:
-        log.warning("WorkerKeeper: method2 failed: %s", e)
+        if pool:
+            for env_key in pool:
+                names.add(_short_name(env_key))
+    except Exception:
+        pass
 
     try:
         from pathlib import Path
-        localappdata = os.environ.get("LOCALAPPDATA", "<NOT SET>")
+        localappdata = os.environ.get("LOCALAPPDATA", "")
         workspace = Path(localappdata) / "Programs" / "comfy-env"
-        log.warning("WorkerKeeper: method3 scanning %s", workspace)
         for root in (workspace / "envs", workspace / ".pixi" / "envs"):
             if root.is_dir():
-                log.warning("WorkerKeeper: method3 found dir %s", root)
                 for child in sorted(root.iterdir()):
                     if child.is_dir():
                         short = _short_name(child.name)
-                        log.warning("WorkerKeeper: method3 found env %s", short)
                         names.add(short)
-            else:
-                log.warning("WorkerKeeper: method3 dir NOT FOUND %s", root)
-    except Exception as e:
-        log.warning("WorkerKeeper: method3 failed: %s", e)
+    except Exception:
+        pass
 
     names.discard("default")
-    log.warning("WorkerKeeper: discovered envs: %s", sorted(names))
-    return sorted(names)
+    result = sorted(names)
+
+    # Only log if the set of envs actually changed
+    if result != _env_names_cache:
+        _env_names_cache = result
+        if result:
+            log.info("WorkerKeeper: discovered envs: %s", result)
+
+    return result
 
 
 def _kill_envs_by_name(target_names):
@@ -282,27 +311,13 @@ NODE_CLASS_MAPPINGS["WorkerKeeperManualKill"] = WorkerKeeperManualKill
 NODE_DISPLAY_NAME_MAPPINGS["WorkerKeeperManualKill"] = "Worker Keeper \u2014 Manual Kill"
 
 
-# Registration
+# ──────────────────────────────────────────────
+# API route handlers (MUST be defined BEFORE registration block)
+# ──────────────────────────────────────────────
+
 _web = None
-try:
-    import server
-    from aiohttp import web as _web
-    instance = server.PromptServer.instance
-    if instance is not None:
-        instance.add_on_prompt_handler(_on_prompt_handler)
-        _install_execution_hook()
-        instance.routes.get("/workerkeeper/status")(_route_status)
-        instance.routes.post("/workerkeeper/kill_all")(_route_kill_all)
-        log.info("WorkerKeeper: registered (fast=on_prompt, accurate=ExecutionList) + /workerkeeper/* routes")
-    else:
-        log.warning("WorkerKeeper: PromptServer.instance is None")
-except ImportError:
-    log.warning("WorkerKeeper: server module not available")
-except Exception as e:
-    log.warning("WorkerKeeper: registration failed: %s", e)
 
 
-# API routes
 async def _route_status(_request):
     try:
         import comfy_env.isolation.wrap as _wrap
@@ -329,6 +344,25 @@ async def _route_kill_all(_request):
         return _web.json_response({"killed": count})
     except Exception as e:
         return _web.json_response({"error": str(e)}, status=500)
+
+
+# Registration
+try:
+    import server
+    from aiohttp import web as _web
+    instance = server.PromptServer.instance
+    if instance is not None:
+        instance.add_on_prompt_handler(_on_prompt_handler)
+        _install_execution_hook()
+        instance.routes.get("/workerkeeper/status")(_route_status)
+        instance.routes.post("/workerkeeper/kill_all")(_route_kill_all)
+        log.info("WorkerKeeper: registered (fast=on_prompt, accurate=ExecutionList) + /workerkeeper/* routes")
+    else:
+        log.warning("WorkerKeeper: PromptServer.instance is None")
+except ImportError:
+    log.warning("WorkerKeeper: server module not available")
+except Exception as e:
+    log.warning("WorkerKeeper: registration failed: %s", e)
 
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
