@@ -1,7 +1,7 @@
 [project]
-name = "comfyui-workerkeeper"
-description = "Background service that kills idle comfy-env isolation workers. Zero workflow nodes — one on_prompt hook, two manual API endpoints."
-version = "0.1.0"
+name = "comfyui-env_workerkeeper"
+description = "WorkerKeeper is a background service for ComfyUI that automatically kills idle "comfy-env" (GeometryPack, GaussianPack, SAM3, MoGe2, Sharp, PanoPack, DepthAnythingV3, etc.) isolation subprocesses. It requires zero workflow changes — install and forget. An optional manual override node is also provided."
+version = "0.0.1"
 license = { text = "MIT" }
 classifiers = [
     "License :: OSI Approved :: MIT License",
@@ -10,10 +10,10 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = ""
+Repository = "https://github.com/kajan988/ComfyUI-WorkerKeeper"
 
 [tool.comfy]
-PublisherId = "pznodes"
-DisplayName = "WorkerKeeper"
+PublisherId = "kajan988"
+DisplayName = "ComfyUI-env-WorkerKeeper"
 Icon = ""
 includes = []

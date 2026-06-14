@@ -2,11 +2,11 @@
 
 **One optional node. Two hooks. Clean RAM & VRAM.**
 
-WorkerKeeper is a background service for ComfyUI that automatically kills idle comfy-env isolation subprocesses. It requires zero workflow changes — install and forget. An optional manual override node is also provided.
+WorkerKeeper is a background service for ComfyUI that automatically kills idle "comfy-env" (GeometryPack, GaussianPack, SAM3, MoGe2, Sharp, PanoPack, DepthAnythingV3, etc.) isolation subprocesses. It requires zero workflow changes — install and forget. An optional manual override node is also provided.
 
 ## The Problem
 
-Custom node packs using `comfy-env` (GeometryPack, GaussianPack, SAM3, MoGe2, Sharp, PanoPack, DepthAnythingV3, etc.) spawn **persistent Python subprocesses** (~2 GB each) for dependency isolation. These subprocesses:
+Custom node packs using `comfy-env` by PozzettiAndrea (GeometryPack, GaussianPack, SAM3, MoGe2, Sharp, PanoPack, DepthAnythingV3, etc.) by  spawn **persistent Python subprocesses** (~2 GB each) for dependency isolation. These subprocesses:
 
 - Live forever once created — ComfyUI never kills them
 - Occupy 2+ GB of system RAM each
